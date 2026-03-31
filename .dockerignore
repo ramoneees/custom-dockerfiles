@@ -1,0 +1,11 @@
+.git/
+.gitignore
+.sisyphus/
+node_modules/
+*.md
+LICENSE
+.env
+.env.*
+docker-compose*.yml
+*.log
+.DS_Store
