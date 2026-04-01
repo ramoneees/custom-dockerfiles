@@ -13,7 +13,7 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     jq \
     python3 \
     ripgrep
-RUN useradd --create-home --shell /bin/bash sandbox
-USER sandbox
-WORKDIR /home/sandbox
+RUN useradd --create-home --shell /bin/bash node
+USER node
+WORKDIR /home/node
 CMD ["sleep", "infinity"]

@@ -9,7 +9,7 @@
 # Layers: JDK 17 + Clojure CLI + AI coding tools + dev configuration
 #
 # Security Notes:
-#   - Runs as non-root user 'sandbox' by default
+#   - Runs as non-root user 'node' by default
 #   - Docker CLI included (no daemon); mount socket at your own risk
 #   - All API keys/tokens must be passed at runtime via -e flags
 #   - No secrets are baked into image layers
@@ -35,10 +35,10 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
         python3 \
         ripgrep
 
-RUN useradd --create-home --shell /bin/bash sandbox
+RUN useradd --create-home --shell /bin/bash node
 
-USER sandbox
-WORKDIR /home/sandbox
+USER node
+WORKDIR /home/node
 
 # =============================================================================
 # Stage 2: OpenClaw sandbox-common (adds language runtimes + tools)
@@ -56,7 +56,7 @@ ARG INSTALL_BUN=1
 ARG BUN_INSTALL_DIR=/opt/bun
 ARG INSTALL_BREW=1
 ARG BREW_INSTALL_DIR=/home/linuxbrew/.linuxbrew
-ARG FINAL_USER=sandbox
+ARG FINAL_USER=node
 
 ENV BUN_INSTALL=${BUN_INSTALL_DIR}
 ENV HOMEBREW_PREFIX=${BREW_INSTALL_DIR}
@@ -168,7 +168,7 @@ RUN curl -fsSL https://opencode.ai/install | bash
 # Multi-model agent harness for AI-assisted coding.
 # ---------------------------------------------------------------------------
 RUN npm install -g oh-my-opencode \
-    && mkdir -p /home/sandbox/.config/opencode
+    && mkdir -p /home/node/.config/opencode
 
 # ---------------------------------------------------------------------------
 # Docker CLI (extracted from official docker:cli image, no daemon)
@@ -182,22 +182,22 @@ COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
 # Workspace and SSH setup
 # ---------------------------------------------------------------------------
 RUN mkdir -p /workspace \
-    && chown sandbox:sandbox /workspace
+    && chown node:node /workspace
 
-RUN mkdir -p /home/sandbox/.ssh \
-    && chmod 700 /home/sandbox/.ssh \
-    && chown sandbox:sandbox /home/sandbox/.ssh
+RUN mkdir -p /home/node/.ssh \
+    && chmod 700 /home/node/.ssh \
+    && chown node:node /home/node/.ssh
 
 # ---------------------------------------------------------------------------
 # Docker group for socket access
 # ---------------------------------------------------------------------------
 RUN groupadd -r docker 2>/dev/null || true \
-    && usermod -aG docker sandbox
+    && usermod -aG docker node
 
 # ---------------------------------------------------------------------------
 # Git global configuration (overridable at runtime via env vars)
 # ---------------------------------------------------------------------------
-USER sandbox
+USER node
 RUN git config --global user.name "Developer" \
     && git config --global user.email "developer@example.com" \
     && git config --global init.defaultBranch main
@@ -228,8 +228,8 @@ set -e
 # Configure Gitea credentials at runtime if env vars are set
 if [ -n "$GITEA_URL" ] && [ -n "$GITEA_TOKEN" ]; then
     git config --global credential.helper store
-    echo "https://${GITEA_USERNAME}:${GITEA_TOKEN}@${GITEA_URL}" > /home/sandbox/.git-credentials
-    chmod 600 /home/sandbox/.git-credentials
+    echo "https://${GITEA_USERNAME}:${GITEA_TOKEN}@${GITEA_URL}" > /home/node/.git-credentials
+    chmod 600 /home/node/.git-credentials
 fi
 
 # Override git user config if env vars are set
@@ -245,4 +245,4 @@ ENTRYPOINT
 VOLUME ["/workspace"]
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["bash"]
+CMD ["sleep", "infinity"]
