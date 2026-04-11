@@ -109,10 +109,11 @@ RUN curl -L -O "https://github.com/clojure/brew-install/releases/download/${CLOJ
     && rm linux-install.sh
 
 # Maven
-ARG MAVEN_VERSION=3.9.9
-RUN curl -fsSL "https://archive.apache.org/dist/maven/apache-maven/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
-    | tar -xz -C /opt \
-    && ln -sf /opt/apache-maven-${MAVEN_VERSION}/bin/mvn /usr/local/bin/mvn
+RUN --mount=type=cache,id=tekton-base-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=tekton-base-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends maven \
+    && rm -rf /var/lib/apt/lists/*
 
 # tmux, nvim and other utilities
 RUN --mount=type=cache,id=tekton-base-apt-cache,target=/var/cache/apt,sharing=locked \
