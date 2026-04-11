@@ -284,6 +284,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN npm install -g eslint@9 prettier
 
 # Semgrep (Python-based)
-RUN pip install --break-system-packages semgrep
+RUN python3 -m pip install --break-system-packages semgrep
 
 USER node
