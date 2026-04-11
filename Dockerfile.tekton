@@ -1,0 +1,248 @@
+# syntax=docker/dockerfile:1.7
+#
+# Tekton Agent Sandbox Images — Multi-target Dockerfile
+#
+# Build individual agents:
+#   docker build -t git.ramoneees.com/tekton/vulcan:latest   -f Dockerfile.tekton --target vulcan .
+#   docker build -t git.ramoneees.com/tekton/arachne:latest  -f Dockerfile.tekton --target arachne .
+#   docker build -t git.ramoneees.com/tekton/cyclops:latest  -f Dockerfile.tekton --target cyclops .
+#   docker build -t git.ramoneees.com/tekton/argos:latest    -f Dockerfile.tekton --target argos .
+#
+# Layer hierarchy:
+#   debian:bookworm-slim
+#     → sandbox (core CLI utils)
+#       → sandbox-common (Node.js, Python, Go, Rust, Bun, Homebrew, pnpm)
+#         → tekton-base (git credentials, Docker CLI, workspace setup)
+#           → vulcan / arachne / cyclops / argos (role-specific tools)
+
+# =============================================================================
+# Stage 1: OpenClaw sandbox (minimal base with core utilities)
+# =============================================================================
+FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c5036a7553723881bffbe AS sandbox
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        jq \
+        python3 \
+        ripgrep
+
+RUN useradd --create-home --shell /bin/bash node
+
+USER node
+WORKDIR /home/node
+
+# =============================================================================
+# Stage 2: OpenClaw sandbox-common (language runtimes + tools)
+# =============================================================================
+FROM sandbox AS sandbox-common
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG PACKAGES="curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file"
+ARG INSTALL_PNPM=1
+ARG INSTALL_BUN=1
+ARG BUN_INSTALL_DIR=/opt/bun
+ARG INSTALL_BREW=1
+ARG BREW_INSTALL_DIR=/home/linuxbrew/.linuxbrew
+ARG FINAL_USER=node
+
+ENV BUN_INSTALL=${BUN_INSTALL_DIR}
+ENV HOMEBREW_PREFIX=${BREW_INSTALL_DIR}
+ENV HOMEBREW_CELLAR=${BREW_INSTALL_DIR}/Cellar
+ENV HOMEBREW_REPOSITORY=${BREW_INSTALL_DIR}/Homebrew
+ENV PATH=${BUN_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/sbin:${PATH}
+
+RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends ${PACKAGES}
+
+RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
+
+RUN if [ "${INSTALL_BUN}" = "1" ]; then \
+    curl -fsSL https://bun.sh/install | bash; \
+    ln -sf "${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \
+    fi
+
+RUN if [ "${INSTALL_BREW}" = "1" ]; then \
+    if ! id -u linuxbrew >/dev/null 2>&1; then useradd -m -s /bin/bash linuxbrew; fi; \
+    mkdir -p "${BREW_INSTALL_DIR}"; \
+    chown -R linuxbrew:linuxbrew "$(dirname "${BREW_INSTALL_DIR}")"; \
+    su - linuxbrew -c "NONINTERACTIVE=1 CI=1 /bin/bash -c '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)'"; \
+    if [ ! -e "${BREW_INSTALL_DIR}/Library" ]; then ln -s "${BREW_INSTALL_DIR}/Homebrew/Library" "${BREW_INSTALL_DIR}/Library"; fi; \
+    if [ ! -x "${BREW_INSTALL_DIR}/bin/brew" ]; then echo "brew install failed"; exit 1; fi; \
+    ln -sf "${BREW_INSTALL_DIR}/bin/brew" /usr/local/bin/brew; \
+    fi
+
+USER ${FINAL_USER}
+
+# =============================================================================
+# Stage 3: tekton-base (shared by all Tekton agents)
+# =============================================================================
+FROM sandbox-common AS tekton-base
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Docker CLI (no daemon)
+COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
+
+# Docker group for socket access
+RUN groupadd -r docker 2>/dev/null || true \
+    && usermod -aG docker node
+
+# Workspace
+RUN mkdir -p /workspace \
+    && chown node:node /workspace
+
+# SSH directory
+RUN mkdir -p /home/node/.ssh \
+    && chmod 700 /home/node/.ssh \
+    && chown node:node /home/node/.ssh
+
+# Git config (overridable at runtime)
+USER node
+RUN git config --global user.name "Tekton Agent" \
+    && git config --global user.email "agent@tekton.dev" \
+    && git config --global init.defaultBranch main
+
+# Runtime env vars
+ENV GITEA_USERNAME="" \
+    GITEA_TOKEN="" \
+    GITEA_URL="https://git.ramoneees.com" \
+    GIT_USER_NAME="" \
+    GIT_USER_EMAIL=""
+
+# Entrypoint — configures git credentials from env vars
+USER root
+COPY --chmod=755 <<'ENTRYPOINT' /usr/local/bin/entrypoint.sh
+#!/bin/bash
+set -e
+
+if [ -n "$GITEA_URL" ] && [ -n "$GITEA_TOKEN" ]; then
+    git config --global credential.helper store
+    PROTO="${GITEA_URL%%://*}"
+    HOST="${GITEA_URL#*://}"
+    echo "${PROTO}://${GITEA_USERNAME}:${GITEA_TOKEN}@${HOST}" > /home/node/.git-credentials
+    chmod 600 /home/node/.git-credentials
+fi
+
+[ -n "$GIT_USER_NAME" ] && git config --global user.name "$GIT_USER_NAME"
+[ -n "$GIT_USER_EMAIL" ] && git config --global user.email "$GIT_USER_EMAIL"
+
+exec "$@"
+ENTRYPOINT
+
+USER node
+VOLUME ["/workspace"]
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["sleep", "infinity"]
+
+# =============================================================================
+# Stage 4a: Vulcan — Backend Engineering Lead
+# Tools: PostgreSQL client, Redis CLI (Node.js, Go, Rust, Python from base)
+# =============================================================================
+FROM tekton-base AS vulcan
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN --mount=type=cache,id=tekton-vulcan-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=tekton-vulcan-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+        postgresql-client \
+        redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+USER node
+
+# =============================================================================
+# Stage 4b: Arachne — Frontend Engineer
+# Tools: Playwright/Chromium, Sass
+# =============================================================================
+FROM tekton-base AS arachne
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Playwright system dependencies
+RUN --mount=type=cache,id=tekton-arachne-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=tekton-arachne-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libnss3 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxrandr2 \
+        libgbm1 \
+        libpango-1.0-0 \
+        libasound2 \
+        libxshmfence1 \
+    && rm -rf /var/lib/apt/lists/*
+
+USER node
+
+# Install Playwright browsers
+RUN npx playwright install chromium
+
+# =============================================================================
+# Stage 4c: Cyclops — DevOps / Infrastructure
+# Tools: kubectl, helm, terraform
+# =============================================================================
+FROM tekton-base AS cyclops
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/
+
+# helm
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# terraform
+RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com bookworm main" > /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends terraform \
+    && rm -rf /var/lib/apt/lists/*
+
+USER node
+
+# =============================================================================
+# Stage 4d: Argos — QA / Code Review
+# Tools: eslint, prettier, semgrep
+# =============================================================================
+FROM tekton-base AS argos
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+USER node
+
+# Linting tools
+RUN npm install -g eslint prettier
+
+# Semgrep (Python-based)
+RUN pip install --break-system-packages semgrep
