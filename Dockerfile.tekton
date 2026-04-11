@@ -261,12 +261,13 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/s
 # helm
 RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# terraform
-RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com bookworm main" > /etc/apt/sources.list.d/hashicorp.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends terraform \
-    && rm -rf /var/lib/apt/lists/*
+# terraform (direct binary download)
+ARG TF_VERSION=1.11.4
+RUN curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" \
+    -o terraform.zip \
+    && unzip terraform.zip \
+    && mv terraform /usr/local/bin/ \
+    && rm terraform.zip
 
 USER node
 
