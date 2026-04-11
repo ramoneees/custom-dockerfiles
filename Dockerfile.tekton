@@ -284,6 +284,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN npm install -g eslint@9 prettier
 
 # Semgrep (Python-based)
-RUN python3 -m pip install --break-system-packages semgrep
+RUN --mount=type=cache,id=tekton-argos-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=tekton-argos-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --break-system-packages semgrep
 
 USER node
