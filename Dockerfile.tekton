@@ -280,10 +280,10 @@ FROM tekton-base AS argos
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-USER node
-
-# Linting tools
-RUN npm install -g eslint prettier
+# Linting tools (as root — eslint 10 needs Node >=20)
+RUN npm install -g eslint@9 prettier
 
 # Semgrep (Python-based)
 RUN pip install --break-system-packages semgrep
+
+USER node
